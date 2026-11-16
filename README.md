@@ -9,6 +9,8 @@ and [`jolution/jira-get-ticket-state`](https://github.com/jolution/jira-get-tick
 ## Usage
 
 ```yaml
+name: 🔄 Sync GitHub <-> Jira
+
 on:
   pull_request:
     types:
@@ -31,7 +33,8 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: jolution/jira-pr-status-sync@v1
+      - name: 🔄 Sync GitHub PR state to Jira
+        uses: jolution/jira-pr-status-sync@v1
         with:
           jira-base-url: ${{ secrets.JIRA_BASE_URL }}
           jira-token: ${{ secrets.JIRA_TOKEN }}
