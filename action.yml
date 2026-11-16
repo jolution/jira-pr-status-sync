@@ -1,0 +1,139 @@
+name: 🔄 Jira PR Status Sync
+description: 🔄 Syncs a PR's lifecycle state to a Jira issue status and GitHub label.
+author: jolution
+
+branding:
+  icon: refresh-cw
+  color: blue
+
+inputs:
+  github-token:
+    description: GitHub token with pull-requests write permission
+    required: false
+    default: ${{ github.token }}
+  jira-base-url:
+    description: 'Jira base URL (e.g. "https://jira.example.com")'
+    required: true
+  jira-token:
+    description: Jira personal access token
+    required: true
+  jira-webhook-url:
+    description: Jira Automation incoming webhook URL used to trigger the status transition
+    required: true
+  status-new:
+    description: Jira status name for the "To Do" column
+    required: true
+  status-active:
+    description: Jira status name for the "In Progress" column
+    required: true
+  status-review:
+    description: Jira status name for the "Code Review" column
+    required: true
+  status-closed:
+    description: Jira status name for the "Done" column
+    required: true
+  event-active:
+    description: Jira Automation webhook event name for the "In Progress" transition
+    required: false
+    default: in-progress
+  event-review:
+    description: Jira Automation webhook event name for the "Code Review" transition
+    required: false
+    default: review
+  event-closed:
+    description: Jira Automation webhook event name for the "Done" transition
+    required: false
+    default: closed
+  label-map:
+    description: >-
+      JSON object mapping Jira status names to GitHub labels, e.g.
+      '{"To Do":"state:new","In Progress":"state:in-progress"}'. All labels
+      in this map are treated as mutually exclusive state labels.
+    required: true
+
+outputs:
+  state:
+    description: Resulting Jira status name after the sync
+    value: ${{ steps.sync-label.outputs.state }}
+
+runs:
+  using: composite
+  steps:
+    - name: 🎫 Get ticket ID
+      id: ticket
+      uses: jolution/jira-get-ticket-id@v1
+
+    - name: 🏷️ Get Jira ticket state
+      id: jira-state
+      if: ${{ steps.ticket.outputs.ticket-id != '' }}
+      uses: jolution/jira-get-ticket-state@v1
+      with:
+        ticket-id: ${{ steps.ticket.outputs.ticket-id }}
+        jira-base-url: ${{ inputs.jira-base-url }}
+        jira-token: ${{ inputs.jira-token }}
+
+    - name: ✏️ Update Jira ticket state
+      id: update-state
+      if: ${{ steps.jira-state.outputs.state != '' }}
+      uses: actions/github-script@v8
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        TICKET_ID: ${{ steps.ticket.outputs.ticket-id }}
+        ACTUAL_STATE: ${{ steps.jira-state.outputs.state }}
+        JIRA_WEBHOOK_URL: ${{ inputs.jira-webhook-url }}
+        STATUS_NEW: ${{ inputs.status-new }}
+        STATUS_ACTIVE: ${{ inputs.status-active }}
+        STATUS_REVIEW: ${{ inputs.status-review }}
+        STATUS_CLOSED: ${{ inputs.status-closed }}
+        EVENT_ACTIVE: ${{ inputs.event-active }}
+        EVENT_REVIEW: ${{ inputs.event-review }}
+        EVENT_CLOSED: ${{ inputs.event-closed }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const path = require('node:path');
+          const { updateJiraState } = require(path.join(process.env.ACTION_PATH, 'src', 'run.js'));
+          const statuses = {
+            new: process.env.STATUS_NEW,
+            active: process.env.STATUS_ACTIVE,
+            review: process.env.STATUS_REVIEW,
+            closed: process.env.STATUS_CLOSED,
+          };
+          const events = {
+            [statuses.active]: process.env.EVENT_ACTIVE,
+            [statuses.review]: process.env.EVENT_REVIEW,
+            [statuses.closed]: process.env.EVENT_CLOSED,
+          };
+          await updateJiraState({
+            context,
+            core,
+            ticketId: process.env.TICKET_ID,
+            actualState: process.env.ACTUAL_STATE,
+            statuses,
+            events,
+            webhookUrl: process.env.JIRA_WEBHOOK_URL,
+          });
+
+    - name: 🏷️ Sync Jira state to GitHub label
+      id: sync-label
+      if: ${{ steps.jira-state.outputs.state != '' }}
+      uses: actions/github-script@v8
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        UPDATED_STATE: ${{ steps.update-state.outputs.state }}
+        ORIGINAL_STATE: ${{ steps.jira-state.outputs.state }}
+        LABEL_MAP: ${{ inputs.label-map }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const path = require('node:path');
+          const { syncLabel } = require(path.join(process.env.ACTION_PATH, 'src', 'run.js'));
+          const state = process.env.UPDATED_STATE || process.env.ORIGINAL_STATE;
+          await syncLabel({
+            github,
+            context,
+            core,
+            state,
+            labelMap: JSON.parse(process.env.LABEL_MAP),
+          });
+          core.setOutput('state', state);
